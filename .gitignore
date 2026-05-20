@@ -1,0 +1,5 @@
+node_modules/
+.env
+monitor-state.json
+logs/
+dados.txt

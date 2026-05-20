@@ -1,0 +1,16 @@
+{
+  "name": "consiafi-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monitor de aprovacoes pendentes no CONSIAFI com alertas por e-mail e WhatsApp.",
+  "main": "monitor.js",
+  "scripts": {
+    "check": "node monitor.js",
+    "check:debug": "node monitor.js --debug"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "nodemailer": "^6.9.15",
+    "playwright": "^1.52.0"
+  }
+}
