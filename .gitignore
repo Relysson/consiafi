@@ -3,3 +3,4 @@ node_modules/
 monitor-state.json
 logs/
 dados.txt
+.claude/

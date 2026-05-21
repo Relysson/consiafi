@@ -50,6 +50,9 @@ jobs:
           CONSIAFI_APPROVAL_URL: ${{ secrets.CONSIAFI_APPROVAL_URL }}
           CONSIAFI_CPF: ${{ secrets.CONSIAFI_CPF }}
           CONSIAFI_PASSWORD: ${{ secrets.CONSIAFI_PASSWORD }}
+          SEI_LOGIN_URL: ${{ secrets.SEI_LOGIN_URL }}
+          SEI_USER: ${{ secrets.SEI_USER }}
+          SEI_PASSWORD: ${{ secrets.SEI_PASSWORD }}
           HEADLESS: "true"
           TIMEOUT_MS: "45000"
           STATE_FILE: ".github/state/monitor-state.json"

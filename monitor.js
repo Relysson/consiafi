@@ -29,14 +29,32 @@ function log(message) {
 
 function loadState(stateFile) {
   if (!fs.existsSync(stateFile)) {
-    return { lastSignature: null, lastPendingCount: 0, lastNotifiedAt: null };
+    return {
+      consiafi: { lastSignature: null, lastPendingCount: 0, lastNotifiedAt: null },
+      sei: { lastSignature: null, lastAssignedCount: 0, lastNotifiedAt: null }
+    };
   }
 
   try {
-    return JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    const parsed = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    return {
+      consiafi: {
+        lastSignature: parsed?.consiafi?.lastSignature ?? parsed?.lastSignature ?? null,
+        lastPendingCount: parsed?.consiafi?.lastPendingCount ?? parsed?.lastPendingCount ?? 0,
+        lastNotifiedAt: parsed?.consiafi?.lastNotifiedAt ?? parsed?.lastNotifiedAt ?? null
+      },
+      sei: {
+        lastSignature: parsed?.sei?.lastSignature ?? null,
+        lastAssignedCount: parsed?.sei?.lastAssignedCount ?? 0,
+        lastNotifiedAt: parsed?.sei?.lastNotifiedAt ?? null
+      }
+    };
   } catch (error) {
     log(`Falha ao ler estado anterior, seguindo com estado vazio: ${error.message}`);
-    return { lastSignature: null, lastPendingCount: 0, lastNotifiedAt: null };
+    return {
+      consiafi: { lastSignature: null, lastPendingCount: 0, lastNotifiedAt: null },
+      sei: { lastSignature: null, lastAssignedCount: 0, lastNotifiedAt: null }
+    };
   }
 }
 
@@ -70,6 +88,13 @@ function formatRows(rows) {
       }
       return parts.join(" | ");
     })
+    .join("\n");
+}
+
+function formatSeiProcesses(processes) {
+  return processes
+    .slice(0, 20)
+    .map((processNumber, index) => `${index + 1}. ${processNumber}`)
     .join("\n");
 }
 
@@ -243,34 +268,118 @@ async function fetchPendingApprovals(config) {
   }
 }
 
+async function fetchSeiAssignedProcesses(config) {
+  const browser = await chromium.launch({ headless: config.headless });
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  try {
+    await page.goto(config.seiLoginUrl, { waitUntil: "domcontentloaded", timeout: config.timeoutMs });
+
+    await page.getByRole("textbox", { name: "Usuário", exact: true }).fill(config.seiUser, { timeout: config.timeoutMs });
+    await page.getByRole("textbox", { name: "Senha", exact: true }).fill(config.seiPassword, { timeout: config.timeoutMs });
+
+    await Promise.all([
+      page.waitForURL(/controlador\.php\?acao=procedimento_controlar/i, { timeout: config.timeoutMs }),
+      page.getByRole("button", { name: "ACESSAR", exact: true }).click({ timeout: config.timeoutMs })
+    ]);
+
+    await page.waitForLoadState("domcontentloaded", { timeout: config.timeoutMs });
+    await page.waitForTimeout(1500);
+
+    const result = await page.evaluate((seiUser) => {
+      const normalizedUser = String(seiUser || "").replace(/\D/g, "");
+      const rows = Array.from(document.querySelectorAll("table tbody tr"));
+      const processes = rows
+        .map((row) => {
+          const cells = Array.from(row.querySelectorAll("td")).map((cell) => (cell.textContent || "").trim().replace(/\s+/g, " "));
+          if (cells.length < 4) {
+            return null;
+          }
+
+          const processNumber = cells[2] || "";
+          const assignedRaw = cells[3] || "";
+          const assignedUser = assignedRaw.replace(/\D/g, "");
+
+          if (!processNumber || !assignedUser) {
+            return null;
+          }
+
+          return { processNumber, assignedUser };
+        })
+        .filter(Boolean)
+        .filter((item) => item.assignedUser === normalizedUser)
+        .map((item) => item.processNumber);
+
+      return {
+        assignedCount: processes.length,
+        processes
+      };
+    }, config.seiUser);
+
+    if (DEBUG) {
+      log(`Resultado bruto SEI: ${JSON.stringify(result, null, 2)}`);
+    }
+
+    return result;
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+}
+
 async function main() {
   const config = {
     loginUrl: process.env.CONSIAFI_LOGIN_URL || "https://consiafi.icmbio.gov.br/consiafipro/login",
     approvalUrl: process.env.CONSIAFI_APPROVAL_URL || "https://consiafi.icmbio.gov.br/consiafipro/planejamento/aprovacao",
     cpf: required("CONSIAFI_CPF"),
     password: required("CONSIAFI_PASSWORD"),
+    seiLoginUrl: process.env.SEI_LOGIN_URL || "https://sei.icmbio.gov.br/sip/login.php?sigla_orgao_sistema=ICMBio&sigla_sistema=SEI",
+    seiUser: required("SEI_USER"),
+    seiPassword: required("SEI_PASSWORD"),
     headless: boolFromEnv(process.env.HEADLESS, true),
     timeoutMs: Number(process.env.TIMEOUT_MS || 45000),
     stateFile: path.resolve(process.cwd(), process.env.STATE_FILE || "monitor-state.json")
   };
 
   const state = loadState(config.stateFile);
-  const result = await fetchPendingApprovals(config);
-  const signature = buildSignature(result.rows);
-  const hasChange = signature !== state.lastSignature;
-  const shouldNotify = result.pendingCount > 0 && (state.lastPendingCount === 0 || hasChange);
+  const consiafiResult = await fetchPendingApprovals(config);
+  const seiResult = await fetchSeiAssignedProcesses(config);
 
-  log(`Consulta concluida. Pendencias encontradas: ${result.pendingCount}.`);
+  const consiafiSignature = buildSignature(consiafiResult.rows);
+  const consiafiHasChange = consiafiSignature !== state.consiafi.lastSignature;
+  const shouldNotifyConsiafi = consiafiResult.pendingCount > 0 && (state.consiafi.lastPendingCount === 0 || consiafiHasChange);
+
+  const seiSignature = seiResult.processes.join("||");
+  const seiHasChange = seiSignature !== state.sei.lastSignature;
+  const shouldNotifySei = seiResult.assignedCount > 0 && (state.sei.lastAssignedCount === 0 || seiHasChange);
+
+  log(`Consulta CONSIAFI concluida. Pendencias encontradas: ${consiafiResult.pendingCount}.`);
+  log(`Consulta SEI concluida. Processos atribuidos a voce: ${seiResult.assignedCount}.`);
+
+  const shouldNotify = shouldNotifyConsiafi || shouldNotifySei;
 
   if (shouldNotify) {
-    const subject = `[CONSIAFI] ${result.pendingCount} solicitacao(oes) pendente(s) para aprovacao`;
+    const subjectParts = [];
+    if (consiafiResult.pendingCount > 0) {
+      subjectParts.push(`CONSIAFI ${consiafiResult.pendingCount} pendencia(s)`);
+    }
+    if (seiResult.assignedCount > 0) {
+      subjectParts.push(`SEI ${seiResult.assignedCount} processo(s)`);
+    }
+
+    const subject = `[Monitor] ${subjectParts.join(" | ")}`;
     const body = [
-      "Foram encontradas solicitacoes pendentes de aprovacao de programacao no CONSIAFI.",
+      "Resumo automatico das consultas.",
       "",
-      `Quantidade: ${result.pendingCount}`,
-      result.statusText ? `Resumo da tabela: ${result.statusText}` : "",
+      "CONSIAFI",
+      `Pendencias de aprovacao: ${consiafiResult.pendingCount}`,
+      consiafiResult.statusText ? `Resumo da tabela: ${consiafiResult.statusText}` : "",
+      consiafiResult.pendingCount > 0 ? formatRows(consiafiResult.rows) : "Nenhuma pendencia encontrada.",
       "",
-      formatRows(result.rows),
+      "SEI",
+      `Processos atribuidos a mim: ${seiResult.assignedCount}`,
+      seiResult.assignedCount > 0 ? formatSeiProcesses(seiResult.processes) : "Nenhum processo atribuido a voce.",
       "",
       `Consulta realizada em: ${new Date().toLocaleString("pt-BR")}`
     ]
@@ -278,16 +387,21 @@ async function main() {
       .join("\n");
 
     await notifyAll(subject, body);
-  } else if (result.pendingCount === 0) {
-    log("Nenhuma pendencia encontrada. Nenhum alerta foi enviado.");
   } else {
-    log("Ainda existem pendencias, mas sem alteracao desde o ultimo alerta.");
+    log("Sem novidades para notificar nos sistemas monitorados.");
   }
 
   saveState(config.stateFile, {
-    lastSignature: signature,
-    lastPendingCount: result.pendingCount,
-    lastNotifiedAt: shouldNotify ? new Date().toISOString() : state.lastNotifiedAt
+    consiafi: {
+      lastSignature: consiafiSignature,
+      lastPendingCount: consiafiResult.pendingCount,
+      lastNotifiedAt: shouldNotifyConsiafi ? new Date().toISOString() : state.consiafi.lastNotifiedAt
+    },
+    sei: {
+      lastSignature: seiSignature,
+      lastAssignedCount: seiResult.assignedCount,
+      lastNotifiedAt: shouldNotifySei ? new Date().toISOString() : state.sei.lastNotifiedAt
+    }
   });
 }
 

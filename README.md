@@ -1,6 +1,6 @@
 # Monitor de aprovacao do CONSIAFI
 
-Este projeto consulta a tela de `Aprovacao de Programacao` do CONSIAFI e envia alerta quando aparecer pelo menos uma solicitacao pendente.
+Este projeto consulta a tela de `Aprovacao de Programacao` do CONSIAFI e tambem o painel do SEI para processos atribuidos a voce. O alerta por e-mail inclui os dois resultados quando houver novidade.
 
 Hoje a verificacao esta apontando para a tela:
 
@@ -10,10 +10,11 @@ Hoje a verificacao esta apontando para a tela:
 ## O que o script faz
 
 1. Faz login no CONSIAFI.
-2. Abre a tela de aprovacao.
-3. Lê a grade de solicitacoes pendentes.
-4. Se houver pendencias novas, envia alerta por e-mail e/ou Telegram.
-5. Salva um arquivo local de estado para nao repetir alerta da mesma lista a cada consulta.
+2. Abre a tela de aprovacao e lê a grade de solicitacoes pendentes.
+3. Faz login no SEI.
+4. Lê os processos atribuidos ao seu usuario no controle de processos.
+5. Se houver novidade no CONSIAFI ou mudanca nos processos atribuidos do SEI, envia alerta por e-mail e/ou Telegram.
+6. Salva um arquivo local de estado para nao repetir alerta da mesma lista a cada consulta.
 
 ## Como configurar
 
@@ -33,6 +34,8 @@ Copy-Item .env.example .env
 
 - `CONSIAFI_CPF`
 - `CONSIAFI_PASSWORD`
+- `SEI_USER`
+- `SEI_PASSWORD`
 - configuracao SMTP para e-mail
 - configuracao do bot do Telegram
 
@@ -93,6 +96,9 @@ No repositorio, em `Settings > Secrets and variables > Actions`, crie:
 
 - `CONSIAFI_LOGIN_URL`
 - `CONSIAFI_APPROVAL_URL`
+- `SEI_LOGIN_URL`
+- `SEI_USER`
+- `SEI_PASSWORD`
 - `CONSIAFI_CPF`
 - `CONSIAFI_PASSWORD`
 - `SMTP_HOST`
@@ -109,6 +115,7 @@ Se quiser, voce pode deixar:
 
 - `CONSIAFI_LOGIN_URL=https://consiafi.icmbio.gov.br/consiafipro/login`
 - `CONSIAFI_APPROVAL_URL=https://consiafi.icmbio.gov.br/consiafipro/planejamento/aprovacao`
+- `SEI_LOGIN_URL=https://sei.icmbio.gov.br/sip/login.php?sigla_orgao_sistema=ICMBio&sigla_sistema=SEI`
 
 ### Estado entre execucoes
 
