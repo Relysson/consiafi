@@ -198,12 +198,18 @@ async function notifyAll(subject, body) {
 }
 
 async function fetchPendingApprovals(config) {
-  const browser = await chromium.launch({ headless: config.headless });
-  const context = await browser.newContext();
+  const browser = await chromium.launch({
+    headless: config.headless,
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
+  });
+  const context = await browser.newContext({
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  });
   const page = await context.newPage();
 
   try {
-    await page.goto(config.loginUrl, { waitUntil: "domcontentloaded", timeout: config.timeoutMs });
+    await page.goto(config.loginUrl, { waitUntil: "networkidle", timeout: config.timeoutMs });
+    await page.waitForTimeout(2000);
 
     await page.locator('input[placeholder="CPF"]:visible').fill(config.cpf, { timeout: config.timeoutMs });
     await page.locator('input[placeholder="Senha"]:visible').fill(config.password, { timeout: config.timeoutMs });
@@ -343,8 +349,30 @@ async function main() {
   };
 
   const state = loadState(config.stateFile);
-  const consiafiResult = await fetchPendingApprovals(config);
-  const seiResult = await fetchSeiAssignedProcesses(config);
+
+  let consiafiResult = { pendingCount: 0, rows: [], statusText: "" };
+  let consiafiError = null;
+  try {
+    consiafiResult = await fetchPendingApprovals(config);
+    log(`Consulta CONSIAFI concluida. Pendencias encontradas: ${consiafiResult.pendingCount}.`);
+  } catch (err) {
+    consiafiError = err.message || String(err);
+    log(`Consulta CONSIAFI falhou: ${consiafiError}`);
+  }
+
+  let seiResult = { assignedCount: 0, processes: [] };
+  let seiError = null;
+  try {
+    seiResult = await fetchSeiAssignedProcesses(config);
+    log(`Consulta SEI concluida. Processos atribuidos a voce: ${seiResult.assignedCount}.`);
+  } catch (err) {
+    seiError = err.message || String(err);
+    log(`Consulta SEI falhou: ${seiError}`);
+  }
+
+  if (consiafiError && seiError) {
+    throw new Error(`Ambas as consultas falharam.\nCONSIAFI: ${consiafiError}\nSEI: ${seiError}`);
+  }
 
   const consiafiSignature = buildSignature(consiafiResult.rows);
   const consiafiHasChange = consiafiSignature !== state.consiafi.lastSignature;
@@ -353,9 +381,6 @@ async function main() {
   const seiSignature = seiResult.processes.join("||");
   const seiHasChange = seiSignature !== state.sei.lastSignature;
   const shouldNotifySei = seiResult.assignedCount > 0 && (state.sei.lastAssignedCount === 0 || seiHasChange);
-
-  log(`Consulta CONSIAFI concluida. Pendencias encontradas: ${consiafiResult.pendingCount}.`);
-  log(`Consulta SEI concluida. Processos atribuidos a voce: ${seiResult.assignedCount}.`);
 
   const shouldNotify = shouldNotifyConsiafi || shouldNotifySei;
 
@@ -373,13 +398,13 @@ async function main() {
       "Resumo automatico das consultas.",
       "",
       "CONSIAFI",
-      `Pendencias de aprovacao: ${consiafiResult.pendingCount}`,
-      consiafiResult.statusText ? `Resumo da tabela: ${consiafiResult.statusText}` : "",
-      consiafiResult.pendingCount > 0 ? formatRows(consiafiResult.rows) : "Nenhuma pendencia encontrada.",
+      consiafiError ? `ERRO na consulta: ${consiafiError}` : `Pendencias de aprovacao: ${consiafiResult.pendingCount}`,
+      !consiafiError && consiafiResult.statusText ? `Resumo da tabela: ${consiafiResult.statusText}` : "",
+      !consiafiError && (consiafiResult.pendingCount > 0 ? formatRows(consiafiResult.rows) : "Nenhuma pendencia encontrada."),
       "",
       "SEI",
-      `Processos atribuidos a mim: ${seiResult.assignedCount}`,
-      seiResult.assignedCount > 0 ? formatSeiProcesses(seiResult.processes) : "Nenhum processo atribuido a voce.",
+      seiError ? `ERRO na consulta: ${seiError}` : `Processos atribuidos a mim: ${seiResult.assignedCount}`,
+      !seiError && (seiResult.assignedCount > 0 ? formatSeiProcesses(seiResult.processes) : "Nenhum processo atribuido a voce."),
       "",
       `Consulta realizada em: ${new Date().toLocaleString("pt-BR")}`
     ]
